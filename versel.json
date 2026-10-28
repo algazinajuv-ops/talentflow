@@ -1,0 +1,9 @@
+
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://talentflow-api-ten.vercel.app/api/:path*"
+    }
+  ]
+}
