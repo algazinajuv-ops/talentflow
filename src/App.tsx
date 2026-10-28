@@ -1,10 +1,19 @@
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
 import { CandidateCard } from './components/CandidateCard';
 import { CandidateDrawer } from './components/CandidateDrawer';
 import { CriteriaPage } from './pages/CriteriaPage';
 import { ImportPage } from './pages/ImportPage';
+
 import { mockCandidates } from './data/mockCandidates';
+import { applyEvaluation } from './utils/evaluateCandidate';
+import {
+  exportCandidatesToExcel,
+  type HiringStatus,
+  type HiringStatusMap,
+} from './utils/exportCandidates';
+
 import type { Candidate } from './types';
 import {
   defaultCriteria,
@@ -13,43 +22,39 @@ import {
 
 type Filter = 'all' | 'clean' | 'review';
 type Page = 'candidates' | 'criteria' | 'import' | 'kanban';
-type HiringStatus = 'new' | 'review' | 'next' | 'rejected';
-type StatusMap = Record<number, HiringStatus>;
 
 const STATUS_KEY = 'talentflow-hiring-statuses';
 const CRITERIA_KEY = 'talentflow-vacancy-criteria';
+const IMPORTED_KEY = 'talentflow-imported-candidates';
 
-const columns: { id: HiringStatus; title: string }[] = [
+const columns: {
+  id: HiringStatus;
+  title: string;
+}[] = [
   { id: 'new', title: 'Новые' },
   { id: 'review', title: 'На проверке' },
   { id: 'next', title: 'Следующий этап' },
   { id: 'rejected', title: 'Отклонены' },
 ];
 
-function loadStatuses(): StatusMap {
+function loadStatuses(): HiringStatusMap {
   try {
     const saved = localStorage.getItem(STATUS_KEY);
     if (!saved) return {};
 
-    const parsed: unknown = JSON.parse(saved);
+    const value: unknown = JSON.parse(saved);
 
-    if (
-      !parsed ||
-      typeof parsed !== 'object' ||
-      Array.isArray(parsed)
-    ) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return {};
     }
 
-    const valid = new Set([
-      'new', 'review', 'next', 'rejected'
-    ]);
+    const valid = new Set(['new', 'review', 'next', 'rejected']);
 
     return Object.fromEntries(
-      Object.entries(parsed).filter(
-        ([, value]) => valid.has(value as string)
+      Object.entries(value).filter(([, status]) =>
+        valid.has(status as string)
       )
-    ) as StatusMap;
+    ) as HiringStatusMap;
   } catch {
     return {};
   }
@@ -60,53 +65,90 @@ function loadCriteria(): VacancyCriteria {
     const saved = localStorage.getItem(CRITERIA_KEY);
     if (!saved) return defaultCriteria;
 
-    const parsed: unknown = JSON.parse(saved);
+    const value: unknown = JSON.parse(saved);
 
-    if (
-      !parsed ||
-      typeof parsed !== 'object' ||
-      Array.isArray(parsed)
-    ) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return defaultCriteria;
     }
 
-    const value = parsed as Partial<VacancyCriteria>;
-    const formats = ['any', 'remote', 'office', 'hybrid'];
+    const data = value as Partial<VacancyCriteria>;
 
-    const validNumber = (number: unknown): number | null =>
-      typeof number === 'number' &&
-      Number.isFinite(number) &&
-      number >= 0
-        ? number
+    const validNumber = (value: unknown): number | null =>
+      typeof value === 'number' &&
+      Number.isFinite(value) &&
+      value >= 0
+        ? value
         : null;
+
+    const formats = ['any', 'remote', 'office', 'hybrid'];
 
     return {
       title:
-        typeof value.title === 'string' && value.title.trim()
-          ? value.title
+        typeof data.title === 'string' && data.title.trim()
+          ? data.title
           : defaultCriteria.title,
 
-      maxSalary: validNumber(value.maxSalary),
+      maxSalary: validNumber(data.maxSalary),
 
-      minExperienceYears: validNumber(value.minExperienceYears),
+      minExperienceYears: validNumber(
+        data.minExperienceYears
+      ),
 
-      requiredSkills: Array.isArray(value.requiredSkills)
-        ? value.requiredSkills.filter(
+      requiredSkills: Array.isArray(data.requiredSkills)
+        ? data.requiredSkills.filter(
             (skill): skill is string =>
               typeof skill === 'string'
           )
         : defaultCriteria.requiredSkills,
 
       workFormat:
-        typeof value.workFormat === 'string' &&
-        formats.includes(value.workFormat)
-          ? value.workFormat as VacancyCriteria['workFormat']
+        typeof data.workFormat === 'string' &&
+        formats.includes(data.workFormat)
+          ? data.workFormat as VacancyCriteria['workFormat']
           : defaultCriteria.workFormat,
 
-      flagShortJobs: value.flagShortJobs === true,
+      flagShortJobs: data.flagShortJobs === true,
     };
   } catch {
     return defaultCriteria;
+  }
+}
+
+function loadImportedCandidates(): Candidate[] {
+  try {
+    const saved = localStorage.getItem(IMPORTED_KEY);
+    if (!saved) return [];
+
+    const value: unknown = JSON.parse(saved);
+    if (!Array.isArray(value)) return [];
+
+    return value.filter((item): item is Candidate => {
+      if (!item || typeof item !== 'object') return false;
+
+      const candidate = item as Partial<Candidate>;
+
+      return (
+        typeof candidate.id === 'number' &&
+        Number.isSafeInteger(candidate.id) &&
+        candidate.id >= 100000 &&
+        typeof candidate.name === 'string' &&
+        typeof candidate.position === 'string' &&
+        typeof candidate.experienceYears === 'number' &&
+        (candidate.salary === null ||
+          typeof candidate.salary === 'number') &&
+        Array.isArray(candidate.skills) &&
+        candidate.skills.every(
+          skill => typeof skill === 'string'
+        ) &&
+        Array.isArray(candidate.notes) &&
+        candidate.notes.every(
+          note => typeof note === 'string'
+        ) &&
+        typeof candidate.summary === 'string'
+      );
+    });
+  } catch {
+    return [];
   }
 }
 
@@ -116,16 +158,32 @@ function App() {
   const [filter, setFilter] = useState<Filter>('all');
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
-  const [statuses, setStatuses] = useState<StatusMap>(loadStatuses);
+  const [statuses, setStatuses] =
+    useState<HiringStatusMap>(loadStatuses);
+
   const [criteria, setCriteria] =
     useState<VacancyCriteria>(loadCriteria);
 
   const [importedCandidates, setImportedCandidates] =
-    useState<Candidate[]>([]);
+    useState<Candidate[]>(loadImportedCandidates);
+
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
+
+  const nextCandidateId = useRef(
+    Math.max(
+      99999,
+      ...importedCandidates.map(candidate => candidate.id)
+    ) + 1
+  );
+
+  const evaluatedImportedCandidates = importedCandidates.map(
+    candidate => applyEvaluation(candidate, criteria)
+  );
 
   const allCandidates = [
     ...mockCandidates,
-    ...importedCandidates,
+    ...evaluatedImportedCandidates,
   ];
 
   useEffect(() => {
@@ -150,8 +208,22 @@ function App() {
     }
   }, [criteria]);
 
-  const getStatus = (id: number): HiringStatus =>
-    statuses[id] ?? 'new';
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        IMPORTED_KEY,
+        JSON.stringify(importedCandidates)
+      );
+    } catch {
+      console.warn(
+        'Не удалось сохранить кандидатов в браузере'
+      );
+    }
+  }, [importedCandidates]);
+
+  function getStatus(id: number): HiringStatus {
+    return statuses[id] ?? 'new';
+  }
 
   function updateStatus(id: number, status: HiringStatus) {
     setStatuses(previous => ({
@@ -163,39 +235,66 @@ function App() {
   }
 
   function handleImportedCandidates(candidates: Candidate[]) {
+    const withUniqueIds = candidates.map(candidate => ({
+      ...candidate,
+      id: nextCandidateId.current++,
+    }));
+
     setImportedCandidates(previous => [
       ...previous,
-      ...candidates.map(candidate => ({
-        ...candidate,
-        id: candidate.id + Date.now(),
-      })),
+      ...withUniqueIds,
     ]);
   }
 
-  const selectedCandidate =
-    allCandidates.find(candidate => candidate.id === selectedId)
-    ?? null;
+  async function handleExport() {
+    setIsExporting(true);
+    setExportError('');
 
-  const filteredCandidates = allCandidates.filter(candidate => {
-    const query = search.trim().toLowerCase();
-
-    const matchesSearch =
-      candidate.name.toLowerCase().includes(query) ||
-      candidate.position.toLowerCase().includes(query) ||
-      candidate.skills.some(skill =>
-        skill.toLowerCase().includes(query)
+    try {
+      await exportCandidatesToExcel(
+        allCandidates,
+        criteria,
+        statuses
       );
+    } catch (error) {
+      console.error('Ошибка экспорта:', error);
+      setExportError(
+        'Не удалось создать Excel. Проверь консоль браузера.'
+      );
+    } finally {
+      setIsExporting(false);
+    }
+  }
 
-    const matchesFilter =
-      filter === 'all' || candidate.status === filter;
+  const selectedCandidate =
+    allCandidates.find(candidate =>
+      candidate.id === selectedId
+    ) ?? null;
 
-    return matchesSearch && matchesFilter;
-  });
+  const filteredCandidates = allCandidates.filter(
+    candidate => {
+      const query = search.trim().toLowerCase();
 
-  const countStatus = (status: HiringStatus) =>
-    allCandidates.filter(
+      const matchesSearch =
+        candidate.name.toLowerCase().includes(query) ||
+        candidate.position.toLowerCase().includes(query) ||
+        candidate.skills.some(skill =>
+          skill.toLowerCase().includes(query)
+        );
+
+      const matchesFilter =
+        filter === 'all' ||
+        candidate.status === filter;
+
+      return matchesSearch && matchesFilter;
+    }
+  );
+
+  function countStatus(status: HiringStatus) {
+    return allCandidates.filter(
       candidate => getStatus(candidate.id) === status
     ).length;
+  }
 
   const pageNames: Record<Page, string> = {
     candidates: 'Кандидаты',
@@ -209,30 +308,41 @@ function App() {
       <aside className="sidebar">
         <h2 className="logo">✦ TalentFlow</h2>
 
-        <nav className="navigation" aria-label="Навигация">
+        <nav
+          className="navigation"
+          aria-label="Навигация"
+        >
           <button
-            className={page === 'candidates' ? 'active' : ''}
+            className={
+              page === 'candidates' ? 'active' : ''
+            }
             onClick={() => setPage('candidates')}
           >
             ◇ Кандидаты
           </button>
 
           <button
-            className={page === 'criteria' ? 'active' : ''}
+            className={
+              page === 'criteria' ? 'active' : ''
+            }
             onClick={() => setPage('criteria')}
           >
             ☷ Критерии
           </button>
 
           <button
-            className={page === 'import' ? 'active' : ''}
+            className={
+              page === 'import' ? 'active' : ''
+            }
             onClick={() => setPage('import')}
           >
             ↥ Импорт PDF
           </button>
 
           <button
-            className={page === 'kanban' ? 'active' : ''}
+            className={
+              page === 'kanban' ? 'active' : ''
+            }
             onClick={() => setPage('kanban')}
           >
             ▦ Канбан
@@ -253,7 +363,10 @@ function App() {
           <span>
             Рабочее пространство / {pageNames[page]}
           </span>
-          <span className="demo-label">Демоверсия</span>
+
+          <span className="demo-label">
+            Демоверсия
+          </span>
         </div>
 
         {page === 'criteria' && (
@@ -265,36 +378,50 @@ function App() {
 
         {page === 'import' && (
           <ImportPage
-            onCandidatesImported={handleImportedCandidates}
-            onOpenCandidates={() => setPage('candidates')}
+            onCandidatesImported={
+              handleImportedCandidates
+            }
+            onOpenCandidates={() =>
+              setPage('candidates')
+            }
           />
         )}
 
         {page === 'candidates' && (
           <>
             <section className="heading">
-              <p className="eyebrow">Подбор персонала</p>
+              <p className="eyebrow">
+                Подбор персонала
+              </p>
+
               <h1>Кандидаты</h1>
+
               <p>
-                Вакансия: {criteria.title}. Отклики и
-                предварительные результаты обработки.
+                Вакансия: {criteria.title}.
+                Результаты проверки резюме.
               </p>
             </section>
 
             <section className="stats">
               <div className="stat-card">
                 <span>Всего откликов</span>
-                <strong>{allCandidates.length}</strong>
+                <strong>
+                  {allCandidates.length}
+                </strong>
               </div>
 
               <div className="stat-card">
-                <span>На проверке</span>
-                <strong>{countStatus('review')}</strong>
+                <span>Импортировано PDF</span>
+                <strong>
+                  {importedCandidates.length}
+                </strong>
               </div>
 
               <div className="stat-card">
                 <span>Следующий этап</span>
-                <strong>{countStatus('next')}</strong>
+                <strong>
+                  {countStatus('next')}
+                </strong>
               </div>
             </section>
 
@@ -306,11 +433,52 @@ function App() {
                 </span>
               </div>
 
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  marginBottom: 20,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={handleExport}
+                  disabled={isExporting}
+                  style={{
+                    border: 'none',
+                    borderRadius: 12,
+                    padding: '14px 22px',
+                    background: '#485242',
+                    color: '#fff',
+                    fontWeight: 600,
+                    cursor: isExporting
+                      ? 'wait'
+                      : 'pointer',
+                  }}
+                >
+                  {isExporting
+                    ? 'Создаём Excel...'
+                    : '↓ Экспорт в Excel'}
+                </button>
+              </div>
+
+              {exportError && (
+                <p
+                  role="alert"
+                  style={{
+                    color: '#a14d40',
+                    marginBottom: 16,
+                  }}
+                >
+                  {exportError}
+                </p>
+              )}
+
               <div className="candidate-toolbar">
                 <input
                   className="search-input"
                   type="search"
-                  placeholder="Поиск по должности, номеру или навыкам..."
+                  placeholder="Поиск по должности, имени или навыкам..."
                   value={search}
                   onChange={event =>
                     setSearch(event.target.value)
@@ -322,7 +490,9 @@ function App() {
                     className={
                       filter === 'all' ? 'selected' : ''
                     }
-                    onClick={() => setFilter('all')}
+                    onClick={() =>
+                      setFilter('all')
+                    }
                   >
                     Все
                   </button>
@@ -331,7 +501,9 @@ function App() {
                     className={
                       filter === 'clean' ? 'selected' : ''
                     }
-                    onClick={() => setFilter('clean')}
+                    onClick={() =>
+                      setFilter('clean')
+                    }
                   >
                     Без замечаний
                   </button>
@@ -340,7 +512,9 @@ function App() {
                     className={
                       filter === 'review' ? 'selected' : ''
                     }
-                    onClick={() => setFilter('review')}
+                    onClick={() =>
+                      setFilter('review')
+                    }
                   >
                     Есть вопросы
                   </button>
@@ -362,7 +536,10 @@ function App() {
               ) : (
                 <div className="empty-state">
                   <h3>Кандидаты не найдены</h3>
-                  <p>Измени запрос или сбрось фильтры.</p>
+                  <p>
+                    Измени запрос или сбрось фильтры.
+                  </p>
+
                   <button
                     className="view-button"
                     onClick={() => {
@@ -381,10 +558,15 @@ function App() {
         {page === 'kanban' && (
           <>
             <section className="heading">
-              <p className="eyebrow">Этапы отбора</p>
+              <p className="eyebrow">
+                Этапы отбора
+              </p>
+
               <h1>Канбан</h1>
+
               <p>
-                Кандидаты распределены по этапам работы HR.
+                Кандидаты распределены
+                по этапам работы HR.
               </p>
             </section>
 
@@ -392,8 +574,11 @@ function App() {
               <span>
                 {allCandidates.length} кандидатов
               </span>
+
               <button
-                onClick={() => setPage('candidates')}
+                onClick={() =>
+                  setPage('candidates')
+                }
               >
                 ← К галерее
               </button>
@@ -402,11 +587,14 @@ function App() {
             <div className="kanban-board">
               {columns.map(column => (
                 <section
-                  className={`kanban-column column-${column.id}`}
+                  className={
+                    `kanban-column column-${column.id}`
+                  }
                   key={column.id}
                 >
                   <div className="column-heading">
                     <h2>{column.title}</h2>
+
                     <span>
                       {countStatus(column.id)}
                     </span>
@@ -414,8 +602,10 @@ function App() {
 
                   <div className="kanban-items">
                     {allCandidates
-                      .filter(candidate =>
-                        getStatus(candidate.id) === column.id
+                      .filter(
+                        candidate =>
+                          getStatus(candidate.id) ===
+                          column.id
                       )
                       .map(candidate => (
                         <button
@@ -429,12 +619,17 @@ function App() {
                             ✦
                           </span>
 
-                          <strong>{candidate.name}</strong>
-                          <small>{candidate.position}</small>
+                          <strong>
+                            {candidate.name}
+                          </strong>
+
+                          <small>
+                            {candidate.position}
+                          </small>
 
                           <span className="kanban-card-footer">
                             {candidate.experienceYears > 0
-                              ? `${candidate.experienceYears} лет опыта`
+                              ? `${candidate.experienceYears} лет общего опыта`
                               : 'Опыт неизвестен'}
 
                             <b>
@@ -462,10 +657,17 @@ function App() {
       {selectedCandidate && (
         <CandidateDrawer
           candidate={selectedCandidate}
-          hiringStatus={getStatus(selectedCandidate.id)}
-          onClose={() => setSelectedId(null)}
+          hiringStatus={
+            getStatus(selectedCandidate.id)
+          }
+          onClose={() =>
+            setSelectedId(null)
+          }
           onChangeStatus={status =>
-            updateStatus(selectedCandidate.id, status)
+            updateStatus(
+              selectedCandidate.id,
+              status
+            )
           }
         />
       )}
