@@ -4,19 +4,16 @@ import type { ChangeEvent } from 'react';
 import type { Candidate } from '../types';
 import './ImportPage.css';
 
-const API_URL = 'http://127.0.0.1:8000/api/resumes/analyze';
-const MAX_FILE_SIZE = 5 * 1024 * 1024;
-
-type FileState = 'waiting' | 'processing' | 'done' | 'error';
+type FileStatus = 'ready' | 'loading' | 'success' | 'error';
 
 interface QueueItem {
   id: string;
   file: File;
-  state: FileState;
+  status: FileStatus;
   error?: string;
 }
 
-interface AnalysisResponse {
+interface AnalyzeResponse {
   filename: string;
   salary: number | null;
   total_experience_years: number | null;
@@ -25,347 +22,315 @@ interface AnalysisResponse {
   warnings: string[];
 }
 
-interface Props {
+interface ImportPageProps {
   onCandidatesImported: (candidates: Candidate[]) => void;
   onOpenCandidates: () => void;
-}
-
-function extractErrorMessage(value: unknown): string {
-  if (
-    typeof value === 'object' &&
-    value !== null &&
-    'detail' in value &&
-    typeof value.detail === 'string'
-  ) {
-    return value.detail;
-  }
-
-  return 'Не удалось обработать PDF.';
 }
 
 export function ImportPage({
   onCandidatesImported,
   onOpenCandidates,
-}: Props) {
-  const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [completed, setCompleted] = useState(false);
-  const nextId = useRef(100000);
+}: ImportPageProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const processedCount = queue.filter(
-    item => item.state === 'done' || item.state === 'error'
-  ).length;
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [processing, setProcessing] = useState(false);
+  const [finished, setFinished] = useState(false);
+  const [successCount, setSuccessCount] = useState(0);
 
-  const successfulCount = queue.filter(
-    item => item.state === 'done'
-  ).length;
+  function selectFiles(event: ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(event.target.files ?? []);
 
-  function updateFile(id: string, patch: Partial<QueueItem>) {
-    setQueue(previous =>
-      previous.map(item =>
-        item.id === id ? { ...item, ...patch } : item
-      )
-    );
-  }
-
-  function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? []);
-
-    const items: QueueItem[] = files.map(file => ({
+    const items: QueueItem[] = selected.map(file => ({
       id: crypto.randomUUID(),
       file,
-      state: 'waiting',
+      status: 'ready',
     }));
 
     setQueue(previous => [...previous, ...items]);
-    setCompleted(false);
+    setFinished(false);
 
-    // Позволяет повторно выбрать файл с тем же именем.
     event.target.value = '';
   }
 
   function removeFile(id: string) {
-    if (isProcessing) return;
-
-    setQueue(previous => previous.filter(item => item.id !== id));
-    setCompleted(false);
+    if (processing) return;
+    setQueue(previous =>
+      previous.filter(item => item.id !== id)
+    );
   }
 
-  async function analyzeFile(file: File): Promise<AnalysisResponse> {
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      throw new Error('Можно загрузить только PDF.');
-    }
-
-    if (file.size > MAX_FILE_SIZE) {
-      throw new Error('Файл превышает 5 МБ.');
-    }
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    let response: Response;
-
-    try {
-      response = await fetch(API_URL, {
-        method: 'POST',
-        body: formData,
-      });
-    } catch {
-      throw new Error(
-        'Не удалось подключиться к Python-серверу. Проверь, что FastAPI запущен на порту 8000.'
-      );
-    }
-
-    if (!response.ok) {
-      const errorBody: unknown = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(errorBody));
-    }
-
-    return (await response.json()) as AnalysisResponse;
+  function updateItem(
+    id: string,
+    status: FileStatus,
+    error?: string
+  ) {
+    setQueue(previous =>
+      previous.map(item =>
+        item.id === id
+          ? { ...item, status, error }
+          : item
+      )
+    );
   }
 
-  function toCandidate(
-    result: AnalysisResponse,
-    id: number
+  function makeCandidate(
+    result: AnalyzeResponse
   ): Candidate {
-    const filenameWithoutExtension =
-      result.filename.replace(/\.pdf$/i, '');
+    const name = result.filename.replace(/\.pdf$/i, '');
+
+    const detectedSkills = Array.isArray(result.skills)
+      ? result.skills
+      : [];
 
     return {
-      id,
-      name: filenameWithoutExtension || `Резюме №${id}`,
-      position: 'Должность не определена',
-      experienceYears: result.total_experience_years ?? 0,
-      salary: result.salary,
+      id: 0,
+      name,
+      position: 'Должность требует уточнения',
+      experienceYears:
+        result.total_experience_years ?? 0,
+      salary: result.salary ?? null,
       confirmedCriteria: 0,
       totalCriteria: 0,
       status: 'review',
-      skills: result.skills,
-      notes: [
-        'Резюме пока не сравнивалось с требованиями вакансии.',
-        ...(result.total_experience_years === null
-          ? ['Общий стаж не найден.']
-          : ['Указан общий стаж, не подтверждён релевантный.']),
-        ...(result.warnings ?? []),
-      ],
+      skills: detectedSkills,
+      notes: Array.isArray(result.warnings)
+        ? result.warnings
+        : [],
       summary:
         result.text_preview ||
-        'Текст резюме не извлечён.',
+        'Резюме загружено. Проверьте сведения вручную.',
     };
   }
 
   async function startAnalysis() {
-    if (isProcessing) return;
+    if (processing) return;
 
-    const pending = queue.filter(item =>
-      item.state === 'waiting' || item.state === 'error'
+    const pending = queue.filter(
+      item => item.status === 'ready' ||
+        item.status === 'error'
     );
 
     if (pending.length === 0) return;
 
-    setIsProcessing(true);
-    setCompleted(false);
+    setProcessing(true);
+    setFinished(false);
 
-    const imported: Candidate[] = [];
+    let completed = 0;
 
     for (const item of pending) {
-      updateFile(item.id, {
-        state: 'processing',
-        error: undefined,
-      });
+      updateItem(item.id, 'loading');
 
       try {
-        const result = await analyzeFile(item.file);
-        const candidate = toCandidate(result, nextId.current++);
+        const form = new FormData();
+        form.append('file', item.file);
 
-        imported.push(candidate);
+        // Один адрес для локальной и публичной версии.
+        const response = await fetch(
+          '/api/resumes/analyze',
+          {
+            method: 'POST',
+            body: form,
+          }
+        );
 
-        updateFile(item.id, { state: 'done' });
+        if (!response.ok) {
+          let message = `Ошибка сервера: ${response.status}`;
+
+          try {
+            const body = await response.json();
+            if (typeof body.detail === 'string') {
+              message = body.detail;
+            }
+          } catch {
+            // Оставляем стандартное сообщение.
+          }
+
+          throw new Error(message);
+        }
+
+        const result =
+          (await response.json()) as AnalyzeResponse;
+
+        onCandidatesImported([makeCandidate(result)]);
+        updateItem(item.id, 'success');
+        completed += 1;
       } catch (error) {
-        updateFile(item.id, {
-          state: 'error',
-          error:
-            error instanceof Error
-              ? error.message
-              : 'Неизвестная ошибка',
-        });
+        updateItem(
+          item.id,
+          'error',
+          error instanceof Error
+            ? error.message
+            : 'Не удалось обработать файл'
+        );
       }
     }
 
-    if (imported.length > 0) {
-      onCandidatesImported(imported);
-    }
-
-    setIsProcessing(false);
-    setCompleted(true);
+    setSuccessCount(completed);
+    setFinished(true);
+    setProcessing(false);
   }
 
-  function clearFinished() {
-    if (isProcessing) return;
+  const readyCount = queue.filter(
+    item => item.status === 'ready' ||
+      item.status === 'error'
+  ).length;
 
-    setQueue(previous =>
-      previous.filter(
-        item => item.state !== 'done'
-      )
-    );
-    setCompleted(false);
-  }
+  const completedCount = queue.filter(
+    item => item.status === 'success' ||
+      item.status === 'error'
+  ).length;
+
+  const progress = queue.length
+    ? (completedCount / queue.length) * 100
+    : 0;
 
   return (
-    <section className="import-page">
+    <div className="import-page">
       <div className="import-intro">
-        <p className="eyebrow">Работа с откликами</p>
-        <h1>Импорт резюме</h1>
+        <p className="eyebrow">РАБОТА С РЕЗЮМЕ</p>
+        <h1>Импорт PDF</h1>
         <p>
-          Загрузи PDF-файлы. TalentFlow извлечёт доступную
-          информацию и подготовит карточки кандидатов.
+          Загрузите резюме, чтобы извлечь сведения
+          и подготовить их к проверке HR.
         </p>
       </div>
 
       <div className="import-upload-card">
         <div className="import-upload-symbol">↥</div>
 
-        <h2>Добавить резюме</h2>
+        <h2>Добавьте резюме</h2>
+
         <p>
-          Можно выбрать сразу несколько PDF.
-          Максимальный размер каждого — 5 МБ.
+          Выберите один или несколько PDF-файлов.
+          Максимум 5 МБ на файл.
         </p>
 
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,application/pdf"
+          accept="application/pdf,.pdf"
           multiple
           hidden
-          disabled={isProcessing}
-          onChange={handleFileSelection}
+          onChange={selectFiles}
         />
 
         <button
-          type="button"
           className="import-select-button"
-          disabled={isProcessing}
           onClick={() => inputRef.current?.click()}
+          disabled={processing}
         >
           + Выбрать PDF-файлы
         </button>
       </div>
 
-      <div className="import-privacy-note">
-        Сейчас файлы отправляются на локальный Python-сервер.
-        Для тестирования используй только вымышленные резюме.
-      </div>
+      <p className="import-privacy-note">
+        Демонстрационная версия. Используйте
+        обезличенные тестовые резюме, не содержащие
+        персональных данных.
+      </p>
 
-      <div className="import-queue">
+      <section className="import-queue">
         <div className="import-section-header">
-          <h2>Выбранные файлы</h2>
+          <h2>Очередь обработки</h2>
           <span>{queue.length} файлов</span>
         </div>
 
         {queue.length === 0 ? (
           <div className="import-empty">
-            Здесь появятся выбранные PDF-файлы.
+            Пока нет выбранных файлов
           </div>
         ) : (
-          <>
-            {queue.map(item => (
-              <div className="import-file" key={item.id}>
-                <div className="import-file-icon">PDF</div>
+          queue.map(item => (
+            <div className="import-file" key={item.id}>
+              <div className="import-file-icon">PDF</div>
 
-                <div className="import-file-details">
-                  <strong>{item.file.name}</strong>
-                  <span>
-                    {(item.file.size / 1024).toFixed(1)} КБ
-                    {' · '}
-                    {item.state === 'waiting' && 'Ожидает'}
-                    {item.state === 'processing' && 'Обрабатывается...'}
-                    {item.state === 'done' && 'Готово'}
-                    {item.state === 'error' && 'Ошибка'}
-                  </span>
+              <div className="import-file-details">
+                <strong>{item.file.name}</strong>
 
-                  {item.error && (
-                    <p className="import-error" role="alert">
-                      {item.error}
-                    </p>
-                  )}
-                </div>
+                <span>
+                  {(item.file.size / 1024).toFixed(0)} КБ
+                  {' · '}
+                  {item.status === 'ready' && 'Ожидает'}
+                  {item.status === 'loading' && 'Анализ...'}
+                  {item.status === 'success' && 'Готово'}
+                  {item.status === 'error' && 'Ошибка'}
+                </span>
 
+                {item.error && (
+                  <p className="import-error">
+                    {item.error}
+                  </p>
+                )}
+              </div>
+
+              {!processing && item.status !== 'success' && (
                 <button
                   className="import-remove"
-                  disabled={isProcessing}
+                  title="Удалить из очереди"
                   onClick={() => removeFile(item.id)}
-                  aria-label={`Убрать ${item.file.name}`}
                 >
                   ×
                 </button>
-              </div>
-            ))}
-
-            <div className="import-progress-area">
-              <div className="import-progress-label">
-                <span>Прогресс обработки</span>
-                <strong>{processedCount} / {queue.length}</strong>
-              </div>
-
-              <div className="import-progress-track">
-                <div
-                  className="import-progress-fill"
-                  style={{
-                    width: `${
-                      queue.length
-                        ? (processedCount / queue.length) * 100
-                        : 0
-                    }%`,
-                  }}
-                />
-              </div>
+              )}
             </div>
-          </>
+          ))
         )}
+      </section>
 
-        <div className="import-actions">
-          <button
-            className="import-start-button"
-            disabled={
-              isProcessing ||
-              !queue.some(item =>
-                item.state === 'waiting' || item.state === 'error'
-              )
-            }
-            onClick={startAnalysis}
-          >
-            {isProcessing
-              ? 'Анализ выполняется...'
-              : 'Начать анализ →'}
-          </button>
+      {queue.length > 0 && (
+        <>
+          <div className="import-progress-area">
+            <div className="import-progress-label">
+              <span>Прогресс обработки</span>
+              <span>{Math.round(progress)}%</span>
+            </div>
 
-          {queue.some(item => item.state === 'done') && (
+            <div className="import-progress-track">
+              <div
+                className="import-progress-fill"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="import-actions">
+            <button
+              className="import-start-button"
+              disabled={processing || readyCount === 0}
+              onClick={startAnalysis}
+            >
+              {processing
+                ? 'Обрабатываем...'
+                : 'Начать анализ'}
+            </button>
+
             <button
               className="import-secondary-button"
-              onClick={clearFinished}
-              disabled={isProcessing}
+              onClick={onOpenCandidates}
             >
-              Очистить завершённые
-            </button>
-          )}
-        </div>
-
-        {completed && (
-          <div className="import-complete" role="status">
-            <strong>Обработка завершена.</strong>
-            <p>
-              Успешно в последней партии: {
-                successfulCount
-              } из {queue.length} файлов в списке.
-              Успешные резюме добавлены в галерею.
-            </p>
-            <button onClick={onOpenCandidates}>
-              Открыть кандидатов →
+              Смотреть кандидатов
             </button>
           </div>
-        )}
-      </div>
-    </section>
+        </>
+      )}
+
+      {finished && (
+        <div className="import-complete">
+          <strong>
+            Обработка завершена: {successCount} новых карточек
+          </strong>
+
+          <p>
+            Результаты доступны в галерее кандидатов.
+            Неизвестные сведения нужно проверить вручную.
+          </p>
+
+          <button onClick={onOpenCandidates}>
+            Перейти к кандидатам
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
