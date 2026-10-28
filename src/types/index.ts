@@ -14,3 +14,9 @@ export interface Candidate {
   notes: string[];
   summary: string;
 }
+
+export type HiringStage =
+  | 'new'
+  | 'clarify'
+  | 'next'
+  | 'rejected';

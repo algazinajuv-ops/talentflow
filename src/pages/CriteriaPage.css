@@ -1,0 +1,271 @@
+
+.criteria-page {
+  max-width: 950px;
+  margin: 0 auto;
+  padding-bottom: 50px;
+}
+
+.criteria-intro {
+  margin: 40px 0;
+}
+
+.criteria-intro h1 {
+  margin: 12px 0;
+}
+
+.criteria-intro > p:last-child {
+  max-width: 600px;
+  line-height: 1.7;
+  color: #8f817a;
+}
+
+.criteria-form {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.criteria-section {
+  background: #fffdfb;
+  border: 1px solid #f0e6e0;
+  border-radius: 22px;
+  padding: 32px;
+}
+
+.criteria-section-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 28px;
+}
+
+.criteria-number {
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+  height: 44px;
+  background: #f3e5dc;
+  color: #a08070;
+  border-radius: 14px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.criteria-section-title h2 {
+  margin: 0;
+  font-size: 25px;
+  font-weight: 500;
+}
+
+.criteria-section-title p {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #94857c;
+}
+
+.criteria-field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.criteria-field > span {
+  color: #554941;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.criteria-field input,
+.criteria-skill-input input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #eaded6;
+  background: #faf6f2;
+  border-radius: 12px;
+  padding: 15px 17px;
+  color: #302a27;
+  font: inherit;
+  outline: none;
+}
+
+.criteria-field input:focus,
+.criteria-skill-input input:focus {
+  border-color: #b89784;
+  box-shadow: 0 0 0 3px #ead7ce77;
+}
+
+.criteria-two-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.criteria-skill-input {
+  display: flex;
+  gap: 12px;
+}
+
+.criteria-skill-input button {
+  border: none;
+  background: #4a5142;
+  color: white;
+  padding: 0 22px;
+  border-radius: 12px;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.criteria-skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.criteria-skill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: #efe4dc;
+  padding: 10px 12px;
+  border-radius: 30px;
+  color: #654f43;
+  font-size: 13px;
+}
+
+.criteria-skill button {
+  border: none;
+  background: #ffffff99;
+  color: #7e6252;
+  width: 23px;
+  height: 23px;
+  border-radius: 50%;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.criteria-help {
+  color: #94857c;
+  font-size: 13px;
+}
+
+.criteria-format-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.criteria-format {
+  border: 1px solid #eaded6;
+  border-radius: 14px;
+  padding: 20px;
+  color: #6b5c53;
+  background: #faf6f2;
+  text-align: left;
+}
+
+.criteria-format.selected {
+  background: #e9ede4;
+  color: #43513b;
+  border-color: #8da083;
+  font-weight: 600;
+}
+
+.criteria-checkbox {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.criteria-checkbox input {
+  width: 19px;
+  height: 19px;
+  margin-top: 3px;
+  accent-color: #4a5142;
+}
+
+.criteria-checkbox span {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.criteria-checkbox strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.criteria-checkbox small {
+  color: #94857c;
+  line-height: 1.6;
+}
+
+.criteria-error,
+.criteria-success {
+  padding: 16px 20px;
+  margin: 0;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.criteria-error {
+  background: #fff0eb;
+  color: #ad483a;
+}
+
+.criteria-success {
+  background: #e8f2e7;
+  color: #3d7145;
+}
+
+.criteria-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.criteria-footer p {
+  color: #94857c;
+  font-size: 12px;
+}
+
+.criteria-footer button {
+  background: #4a5142;
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 16px 22px;
+  font-weight: 600;
+}
+
+.criteria-footer button:hover,
+.criteria-skill-input button:hover {
+  background: #343e31;
+}
+
+@media (max-width: 700px) {
+  .criteria-section {
+    padding: 22px;
+  }
+
+  .criteria-two-columns,
+  .criteria-format-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .criteria-skill-input {
+    flex-direction: column;
+  }
+
+  .criteria-skill-input button {
+    padding: 14px;
+  }
+
+  .criteria-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
